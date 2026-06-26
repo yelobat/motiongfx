@@ -58,6 +58,23 @@ impl Sequence {
 
         self.clips.push(span);
     }
+
+    /// Fallible version of `[Self::push]`. Appends the clip
+    /// only if it does not overlap the sequence's last clip.
+    ///
+    /// On overlap, returns the conflicting (existing) clip and
+    /// leaves the sequence untouched.
+    #[inline]
+    pub fn try_push(
+        &mut self,
+        span: ActionClip,
+    ) -> Result<(), ActionClip> {
+        if span.start < self.end() {
+            return Err(*self.clips.last());
+        }
+        self.clips.push(span);
+        Ok(())
+    }
 }
 
 impl Extend<ActionClip> for Sequence {

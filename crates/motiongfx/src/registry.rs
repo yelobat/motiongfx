@@ -6,6 +6,8 @@ use field_path::field::UntypedField;
 use field_path::field_accessor::FieldAccessor;
 
 use crate::ThreadSafe;
+use crate::interpolation::Interpolation;
+use crate::live::LiveActionRegistry;
 use crate::pipeline::{
     BakeCtx, Pipeline, PipelineHandle, PipelineKey, PipelineUntyped,
     SampleCtx,
@@ -16,6 +18,7 @@ use crate::subject::SubjectId;
 pub struct Registry {
     pub accessor: AccessorRegistry,
     pub pipeline: PipelineRegistry,
+    pub live: LiveActionRegistry,
 }
 
 impl Registry {
@@ -23,6 +26,7 @@ impl Registry {
         Self {
             accessor: AccessorRegistry::new(),
             pipeline: PipelineRegistry::new(),
+            live: LiveActionRegistry::new(),
         }
     }
 
@@ -37,6 +41,21 @@ impl Registry {
     {
         self.accessor.register(field_acc);
         self.pipeline.register::<W, I, S, T>();
+    }
+
+    /// Register everything needed to do live edits on
+    /// this field at runtime.
+    pub fn register_live<W, I, S, T, M>(
+        &mut self,
+        field_acc: FieldAccessor<S, T>,
+    ) where
+        W: SubjectSource<I, S> + 'static,
+        I: SubjectId,
+        S: 'static,
+        T: Interpolation<M> + Clone + ThreadSafe,
+    {
+        self.register::<W, I, S, T>(field_acc);
+        self.live.register::<W, I, S, T, M>();
     }
 
     /// Create a [`TimelineBuilder`] for a specific `W` world.

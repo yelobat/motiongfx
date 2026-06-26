@@ -1,4 +1,4 @@
-use core::any::TypeId;
+use core::any::{Any, TypeId};
 use core::marker::PhantomData;
 
 use alloc::boxed::Box;
@@ -222,6 +222,9 @@ fn on_remove_id_type<I: SubjectId>(
 #[derive(Default)]
 pub struct ActionWorld {
     world: World,
+    /// Per-sequence baseline: the field's value the first time
+    /// that sequence was baked.
+    baselines: HashMap<ActionKey, Box<dyn Any + Send + Sync>>,
 }
 
 impl ActionWorld {
@@ -231,7 +234,13 @@ impl ActionWorld {
         // manually for the sample query to be valid.
         world.register_component::<EaseStorage>();
 
-        Self { world }
+        // Same for the disabled (mute) marker.
+        world.register_component::<DisabledStorage>();
+
+        Self {
+            world,
+            baselines: HashMap::new(),
+        }
     }
 
     pub fn add<I, T>(
@@ -245,6 +254,8 @@ impl ActionWorld {
         T: ThreadSafe,
     {
         let field = field.into();
+
+        self.world.register_component::<KeyframesStorage<T>>();
 
         let uid = self
             .world
@@ -295,6 +306,165 @@ impl ActionWorld {
 
     pub fn get_id<I: SubjectId>(&self, uid: &UId) -> Option<&I> {
         self.world.get_resource::<IdRegistry<I>>()?.get_id(uid)
+    }
+
+    /// Returns the [`ActionKey`] of an existing action, if present.
+    pub fn action_key(&self, id: ActionId) -> Option<&ActionKey> {
+        self.world.get::<ActionKey>(id.entity())
+    }
+
+    /// The baked [`Segment<T>`] of an action.
+    ///
+    /// Returns `None` if the action does not exist.
+    pub fn get_segment<T: ThreadSafe>(
+        &self,
+        id: ActionId,
+    ) -> Option<&Segment<T>> {
+        self.world.get::<Segment<T>>(id.entity())
+    }
+
+    /// The easing of an action, if the action exists and has one.
+    /// If `None`, then it is implied to be linear.
+    pub fn get_ease(&self, id: ActionId) -> Option<Ease> {
+        self.world.get::<EaseStorage>(id.entity()).map(|e| e.0)
+    }
+
+    /// The keyframe points of an action, when it is a keyframed
+    /// one of target type `T`.
+    pub fn get_keyframes<T: ThreadSafe>(
+        &self,
+        id: ActionId,
+    ) -> Option<&KeyframesStorage<T>> {
+        self.world.get::<KeyframesStorage<T>>(id.entity())
+    }
+
+    /// Set of replace an action's keyframe points. Returns `false`
+    /// if no action with `id` exists.
+    pub fn set_keyframes<T: ThreadSafe>(
+        &mut self,
+        id: ActionId,
+        keyframes: KeyframesStorage<T>,
+    ) -> bool {
+        let Ok(mut entity) = self.world.get_entity_mut(id.entity())
+        else {
+            return false;
+        };
+
+        if entity.get::<ActionKey>().is_none() {
+            return false;
+        }
+        entity.insert(keyframes);
+        true
+    }
+
+    /// Whether the action is disabled (muted). `false` also when
+    /// no action with `id` exists.
+    pub fn is_disabled(&self, id: ActionId) -> bool {
+        self.world.get::<DisabledStorage>(id.entity()).is_some()
+    }
+
+    /// Disable (mute) or re-enable an action.
+    ///
+    /// Returns `false` if no action with `id` exists. The baked
+    /// segments are stale afterwards.
+    pub fn set_disabled(
+        &mut self,
+        id: ActionId,
+        disabled: bool,
+    ) -> bool {
+        let Ok(mut entity) = self.world.get_entity_mut(id.entity())
+        else {
+            return false;
+        };
+
+        if entity.get::<ActionKey>().is_none() {
+            return false;
+        }
+
+        if disabled {
+            entity.insert(DisabledStorage);
+        } else {
+            entity.remove::<DisabledStorage>();
+        }
+        true
+    }
+
+    /// Set, replace or clear (`None` = linear) the easing of an action.
+    pub fn set_ease(
+        &mut self,
+        id: ActionId,
+        ease: Option<Ease>,
+    ) -> bool {
+        let Ok(mut entity) = self.world.get_entity_mut(id.entity())
+        else {
+            return false;
+        };
+        if entity.get::<ActionKey>().is_none() {
+            return false;
+        }
+
+        match ease {
+            Some(ease) => {
+                entity.insert(EaseStorage(ease));
+            }
+            None => {
+                entity.remove::<EaseStorage>();
+            }
+        }
+        true
+    }
+
+    /// Replace an action.
+    pub fn replace_action<T: ThreadSafe>(
+        &mut self,
+        id: ActionId,
+        action: impl Action<T>,
+    ) -> bool {
+        let Ok(mut entity) = self.world.get_entity_mut(id.entity())
+        else {
+            return false;
+        };
+        if entity.get::<ActionStorage<T>>().is_none() {
+            return false;
+        }
+
+        entity.insert(ActionStorage::new(action));
+        true
+    }
+
+    /// The cached baseline for a sequence, if one exists.
+    pub(crate) fn get_baseline<T: ThreadSafe>(
+        &self,
+        key: &ActionKey,
+    ) -> Option<&T> {
+        self.baselines.get(key)?.downcast_ref::<T>()
+    }
+
+    /// Capture a sequence's baseline.
+    pub(crate) fn set_baseline<T: ThreadSafe>(
+        &mut self,
+        key: ActionKey,
+        value: T,
+    ) {
+        self.baselines.entry(key).or_insert_with(|| Box::new(value));
+    }
+
+    pub(crate) fn emptied_baseline_keys(&self) -> Vec<ActionKey> {
+        if self.baselines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut active: Vec<ActionKey> = Vec::new();
+        if let Some(mut q) = self.world.try_query::<&ActionKey>() {
+            for key in q.iter(&self.world) {
+                active.push(*key);
+            }
+        }
+        self.baselines
+            .keys()
+            .filter(|k| !active.contains(*k))
+            .copied()
+            .collect()
     }
 }
 
@@ -406,7 +576,11 @@ pub struct InterpActionBuilder<'w, T> {
 
 impl<T> InterpActionBuilder<'_, T> {
     /// Set the easing method of the action.
-    pub fn with_ease(mut self, ease: EaseFn) -> Self {
+    pub fn with_ease(self, ease: EaseFn) -> Self {
+        self.with_easing(Ease::Fn(ease))
+    }
+
+    pub fn with_easing(mut self, ease: Ease) -> Self {
         self.inner.world.insert(EaseStorage(ease));
         self
     }
@@ -440,6 +614,21 @@ impl ActionId {
     #[inline(always)]
     pub(crate) fn entity(&self) -> Entity {
         self.0
+    }
+
+    /// Stable `u64` representation for transport (e.g. over BRP).
+    #[inline]
+    #[must_use]
+    pub fn to_bits(self) -> u64 {
+        self.0.to_bits()
+    }
+
+    /// Reconstruct an [`ActionId`] from the bits produced by
+    /// [`ActionId::to_bits`].
+    #[inline]
+    #[must_use]
+    pub fn from_bits(bits: u64) -> Self {
+        Self(Entity::from_bits(bits))
     }
 }
 
@@ -478,13 +667,130 @@ pub struct InterpStorage<T>(pub InterpFn<T>);
 /// Easing function on a [`f32`] time.
 pub type EaseFn = fn(t: f32) -> f32;
 
+/// An easing applied to the interpolation parameter `t`.
+///
+/// Either a plain easing function or a parameterized cubic-bezier
+/// curve.
+#[derive(Debug, Clone, Copy)]
+pub enum Ease {
+    Fn(EaseFn),
+    CubicBezier([f32; 4]),
+}
+
+impl Ease {
+    /// Evaluate the easing at `t` (expected in \[0, 1\]).
+    #[inline]
+    pub fn eval(&self, t: f32) -> f32 {
+        match self {
+            Self::Fn(f) => f(t),
+            Self::CubicBezier([x1, y1, x2, y2]) => {
+                cubic_bezier_ease(*x1, *y1, *x2, *y2, t)
+            }
+        }
+    }
+}
+
+impl From<EaseFn> for Ease {
+    fn from(f: EaseFn) -> Self {
+        Self::Fn(f)
+    }
+}
+
+impl PartialEq for Ease {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fn(a), Self::Fn(b)) => {
+                core::ptr::fn_addr_eq(*a, *b)
+            }
+            (Self::CubicBezier(a), Self::CubicBezier(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+fn cubic_bezier_ease(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    t: f32,
+) -> f32 {
+    if t <= 0.0 {
+        return 0.0;
+    }
+
+    if t >= 1.0 {
+        return 1.0;
+    }
+
+    #[inline]
+    fn coefficients(c1: f32, c2: f32) -> (f32, f32, f32) {
+        let c = 3.0 * c1;
+        let b = 3.0 * (c2 - c1) - c;
+        let a = 1.0 - c - b;
+        (a, b, c)
+    }
+
+    #[inline]
+    fn sample(a: f32, b: f32, c: f32, u: f32) -> f32 {
+        ((a * u + b) * u + c) * u
+    }
+
+    #[inline]
+    fn slope(a: f32, b: f32, c: f32, u: f32) -> f32 {
+        (3.0 * a * u + 2.0 * b) * u + c
+    }
+
+    let (ax, bx, cx) = coefficients(x1, x2);
+    let (ay, by, cy) = coefficients(y1, y2);
+
+    // Newton-Raphson
+    let mut u = t;
+    for _ in 0..8 {
+        let x = sample(ax, bx, cx, u) - t;
+        if x.abs() < 1e-6 {
+            return sample(ay, by, cy, u);
+        }
+        let d = slope(ax, bx, cx, u);
+        if d.abs() < 1e-6 {
+            break;
+        }
+        u = (u - x / d).clamp(0.0, 1.0);
+    }
+
+    // Bisection fallback (x(u) is monotonic for x1, x2 in [0, 1])
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    u = t;
+    for _ in 0..32 {
+        let x = sample(ax, bx, cx, u);
+        if (x - t).abs() < 1e-6 {
+            break;
+        }
+        if x < t {
+            lo = u;
+        } else {
+            hi = u;
+        }
+        u = 0.5 * (lo + hi);
+    }
+    sample(ay, by, cy, u)
+}
+
 /// A storage component for a custom [`EaseFn`].
 ///
 /// This can be optionally inserted alongside [`ActionStorage`]
 /// to customize the action.
 #[derive(Component, Debug, Clone, Copy)]
 #[component(immutable)]
-pub struct EaseStorage(pub EaseFn);
+pub struct EaseStorage(pub Ease);
+
+/// Marker component: the action is disabled (muted).
+///
+/// A disabled action bakes to an identity [`Segment`]
+/// behaving exactly as if the clip were absent.
+#[derive(Component, Debug, Clone, Copy)]
+#[component(immutable)]
+pub struct DisabledStorage;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActionClip {
@@ -523,6 +829,30 @@ impl<T> Segment<T> {
     }
 }
 
+/// One point of a keyframed action (see [`KeyframesStorage`]).
+#[derive(Debug, Clone)]
+pub struct Keyframe<T> {
+    /// Normalised time within the clip, `0..=1`.
+    pub t: f32,
+    /// Absolute value at `t`.
+    pub value: T,
+    /// Ease of the segment *ending* at this keyframe.
+    pub ease: Option<Ease>,
+    /// Step interpolation: the segment ending here keeps the previous
+    /// value for its whole span and snaps to `value` exactly at `t`.
+    pub hold: bool,
+}
+
+/// Optional multi-keyframe payload of an action: when present, the
+/// sample path interpolates through these points instead of one.
+#[derive(Component)]
+#[component(immutable)]
+pub struct KeyframesStorage<T> {
+    /// Non-empty, sorted ascending by `t`, each `t` in `0..=1`.
+    /// Construction (the live path) sorts and clamps.
+    pub points: Vec<Keyframe<T>>,
+}
+
 /// Determines how a [`Segment`] should be sampled.
 #[derive(Component, Debug, Clone, Copy)]
 #[component(storage = "SparseSet", immutable)]
@@ -530,4 +860,33 @@ pub enum SampleMode {
     Start,
     End,
     Interp(f32),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cubic_bezier_endpoints_and_clamping() {
+        let ease = Ease::CubicBezier([0.42, 0.0, 0.58, 1.0]);
+        assert_eq!(ease.eval(0.0), 0.0);
+        assert_eq!(ease.eval(1.0), 1.0);
+        assert_eq!(ease.eval(-0.5), 0.0);
+        assert_eq!(ease.eval(1.5), 1.0);
+    }
+
+    #[test]
+    fn cubic_bezier_symmetric_curve_midpoint() {
+        // ease-in-out style curve is symmetric about (0.5, 0.5).
+        let ease = Ease::CubicBezier([0.42, 0.0, 0.58, 1.0]);
+        assert!((ease.eval(0.5) - 0.5).abs() < 1e-4);
+        // Symmetry: f(t) + f(1-t) == 1.
+        for t in [0.1, 0.25, 0.4] {
+            let sum = ease.eval(t) + ease.eval(1.0 - t);
+            assert!(
+                (sum - 1.0).abs() < 1e-3,
+                "asymmetric at {t}: {sum}"
+            );
+        }
+    }
 }

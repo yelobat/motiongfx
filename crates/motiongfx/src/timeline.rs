@@ -199,9 +199,20 @@ impl<W: 'static> Timeline<W> {
                         start: clip.start,
                         end: clip.end(),
                     };
+
+                    // The clip on the far side of the gap (if one exists).
+                    let crossed_from_right =
+                        clips.get(index).is_some_and(|next| {
+                            time_range.overlap(&Range {
+                                start: next.start,
+                                end: next.end(),
+                            })
+                        });
                     // Skip if the the animation range does not
                     // overlap with the span range.
-                    if !time_range.overlap(&clip_range) {
+                    if !time_range.overlap(&clip_range)
+                        && !crossed_from_right
+                    {
                         continue;
                     }
 
@@ -234,7 +245,19 @@ impl<W: 'static> Timeline<W> {
         registry: &Registry,
         subject_world: &mut W,
     ) {
-        for key in self.pipeline_counts.iter().map(|(key, _)| key) {
+        let mut keys: Vec<PipelineKey> = self
+            .pipeline_counts
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
+        for action_key in self.action_world.emptied_baseline_keys() {
+            let pkey = PipelineKey::from_action_key::<W>(action_key);
+            if !keys.contains(&pkey) {
+                keys.push(pkey);
+            }
+        }
+
+        for key in &keys {
             let ok = registry.pipeline.sample(
                 key,
                 SampleCtx {
@@ -250,6 +273,50 @@ impl<W: 'static> Timeline<W> {
     fn reset_queues(&mut self) {
         self.queue_cache.clear();
         self.action_world.clear_all_marks();
+    }
+
+    /// Number of tracks in this timeline.
+    #[inline]
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
+    }
+
+    /// Mutable access to the underlying [`ActionWorld`]. Exposed
+    /// so the live editing layer can perform live edits.
+    #[inline]
+    pub fn action_world_mut(&mut self) -> &mut ActionWorld {
+        &mut self.action_world
+    }
+
+    /// Immutable access to the underlying [`ActionWorld`].
+    #[inline]
+    pub fn action_world(&self) -> &ActionWorld {
+        &self.action_world
+    }
+
+    /// Increment the reference count for `key`, adding it if absent.
+    fn bump_pipeline(&mut self, key: PipelineKey) {
+        let mut counts: Vec<(PipelineKey, u32)> =
+            self.pipeline_counts.to_vec();
+        match counts.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, c)) => *c += 1,
+            None => counts.push((key, 1)),
+        }
+        self.pipeline_counts = counts.into_boxed_slice();
+    }
+
+    /// Decrement the reference count for `key`, removing it at zero.
+    fn decrement_pipeline(&mut self, key: PipelineKey) {
+        let mut counts: Vec<(PipelineKey, u32)> =
+            self.pipeline_counts.to_vec();
+        if let Some(pos) = counts.iter().position(|(k, _)| *k == key)
+        {
+            counts[pos].1 = counts[pos].1.saturating_sub(1);
+            if counts[pos].1 == 0 {
+                counts.remove(pos);
+            }
+        }
+        self.pipeline_counts = counts.into_boxed_slice();
     }
 }
 
@@ -351,6 +418,262 @@ impl<W> Timeline<W> {
     }
 }
 
+// Live editing methods
+impl<W: 'static> Timeline<W> {
+    /// Insert a constant-target action onto `track_index` at runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_constant_action(
+        &mut self,
+        track_index: usize,
+        live: &crate::live::LiveActionRegistry,
+        key: crate::live::LiveFieldKey,
+        subject: &dyn core::any::Any,
+        target: crate::live::LiveTarget,
+        duration: f32,
+        start_at: f32,
+        ease: Option<crate::action::Ease>,
+    ) -> Result<ActionId, crate::live::LiveEditError> {
+        if track_index >= self.tracks.len() {
+            return Err(crate::live::LiveEditError::TrackOutOfRange);
+        }
+
+        if !live.contains(&key.pipeline) {
+            return Err(
+                crate::live::LiveActionError::Unregistered.into()
+            );
+        }
+
+        // Build the typed action inside the action world.
+        let id = live.construct(
+            &key.pipeline,
+            &mut self.action_world,
+            subject,
+            key.field,
+            target,
+            ease,
+        )?;
+
+        // Bump the pipeline reference count.
+        self.bump_pipeline(key.pipeline);
+
+        // Recompile the affected track with the new clip appended.
+        // The live constructor created the ActionKey from the same
+        // subject + field, so read it back from the action world.
+        let action_key = *self
+            .action_world
+            .action_key(id)
+            .expect("action just inserted");
+        let mut fragment = self.tracks[track_index].to_fragment();
+        fragment.append_clip(
+            action_key,
+            crate::action::ActionClip::new(id, duration),
+            start_at,
+        );
+        self.tracks[track_index] = fragment.compile();
+
+        Ok(id)
+    }
+
+    /// Insert a live keyframed action onto `track_index` at runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_keyframes_action(
+        &mut self,
+        track_index: usize,
+        live: &crate::live::LiveActionRegistry,
+        key: crate::live::LiveFieldKey,
+        subject: &dyn core::any::Any,
+        keyframes: alloc::vec::Vec<crate::live::LiveKeyframe>,
+        duration: f32,
+        start_at: f32,
+        ease: Option<crate::action::Ease>,
+    ) -> Result<ActionId, crate::live::LiveEditError> {
+        if track_index >= self.tracks.len() {
+            return Err(crate::live::LiveEditError::TrackOutOfRange);
+        }
+
+        if !live.contains(&key.pipeline) {
+            return Err(
+                crate::live::LiveActionError::Unregistered.into()
+            );
+        }
+
+        let id = live.construct_keyframes(
+            &key.pipeline,
+            &mut self.action_world,
+            subject,
+            key.field,
+            keyframes,
+            ease,
+        )?;
+
+        self.bump_pipeline(key.pipeline);
+
+        let action_key = *self
+            .action_world
+            .action_key(id)
+            .expect("action just inserted");
+        let mut fragment = self.tracks[track_index].to_fragment();
+        fragment.append_clip(
+            action_key,
+            crate::action::ActionClip::new(id, duration),
+            start_at,
+        );
+        self.tracks[track_index] = fragment.compile();
+        Ok(id)
+    }
+
+    /// Replace an existing keyframed action's points in place.
+    pub fn update_keyframes_action(
+        &mut self,
+        id: ActionId,
+        live: &crate::live::LiveActionRegistry,
+        keyframes: alloc::vec::Vec<crate::live::LiveKeyframe>,
+    ) -> Result<(), crate::live::LiveEditError> {
+        let Some(action_key) = self.action_world.action_key(id)
+        else {
+            return Err(crate::live::LiveEditError::NotFound);
+        };
+        let pkey = PipelineKey::from_action_key::<W>(*action_key);
+
+        live.update_keyframes(
+            &pkey,
+            &mut self.action_world,
+            id,
+            keyframes,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Remove an action from `track_index` at runtime.
+    pub fn remove_action(
+        &mut self,
+        track_index: usize,
+        id: ActionId,
+    ) -> Result<(), crate::live::LiveEditError> {
+        if track_index >= self.tracks.len() {
+            return Err(crate::live::LiveEditError::TrackOutOfRange);
+        }
+
+        let Some(action_key) = self.action_world.action_key(id)
+        else {
+            return Err(crate::live::LiveEditError::NotFound);
+        };
+        let action_key = *action_key;
+
+        let mut fragment = self.tracks[track_index].to_fragment();
+        if !fragment.remove_clip(&action_key, id) {
+            return Err(crate::live::LiveEditError::NotFound);
+        }
+        self.tracks[track_index] = fragment.compile();
+
+        // Drop the action entity and decrement the pipeline count.
+        if let Some(removed_key) = self.action_world.remove(id) {
+            let pkey = PipelineKey::from_action_key::<W>(removed_key);
+            self.decrement_pipeline(pkey);
+        }
+
+        Ok(())
+    }
+
+    /// Move an existing action to a new start time
+    /// (and an optional new duration) on `track_index`, in place.
+    pub fn reschedule_action(
+        &mut self,
+        track_index: usize,
+        id: ActionId,
+        new_start: f32,
+        new_duration: Option<f32>,
+    ) -> Result<(), crate::live::LiveEditError> {
+        if track_index >= self.tracks.len() {
+            return Err(crate::live::LiveEditError::TrackOutOfRange);
+        }
+
+        let mut fragment = self.tracks[track_index].to_fragment();
+        fragment.reschedule_clip(id, new_start, new_duration)?;
+        self.tracks[track_index] = fragment.compile();
+        Ok(())
+    }
+
+    /// Replace the target value of an existing action in place.
+    pub fn update_action(
+        &mut self,
+        id: ActionId,
+        live: &crate::live::LiveActionRegistry,
+        target: crate::live::LiveTarget,
+    ) -> Result<(), crate::live::LiveEditError> {
+        let Some(action_key) = self.action_world.action_key(id)
+        else {
+            return Err(crate::live::LiveEditError::NotFound);
+        };
+        let pkey = PipelineKey::from_action_key::<W>(*action_key);
+        live.update(&pkey, &mut self.action_world, id, target)
+            .map_err(Into::into)
+    }
+
+    /// Set, replace or clear the easing of an existing action.
+    pub fn set_action_ease(
+        &mut self,
+        id: ActionId,
+        ease: Option<crate::action::Ease>,
+    ) -> Result<(), crate::live::LiveEditError> {
+        if self.action_world.set_ease(id, ease) {
+            Ok(())
+        } else {
+            Err(crate::live::LiveEditError::NotFound)
+        }
+    }
+
+    /// Enable or disable an action in place.
+    pub fn set_action_enabled(
+        &mut self,
+        id: ActionId,
+        enabled: bool,
+    ) -> Result<(), crate::live::LiveEditError> {
+        if self.action_world.set_disabled(id, !enabled) {
+            Ok(())
+        } else {
+            Err(crate::live::LiveEditError::NotFound)
+        }
+    }
+
+    /// Whether an action is enabled. `None` if no action with
+    /// `id` exists.
+    pub fn is_action_enabled(&self, id: ActionId) -> Option<bool> {
+        self.action_world
+            .action_key(id)
+            .map(|_| !self.action_world.is_disabled(id))
+    }
+
+    /// Grow the timeline to at least `count` tracks by appending
+    /// empty tracks.
+    pub fn ensure_track_count(&mut self, count: usize) {
+        if self.tracks.len() >= count {
+            return;
+        }
+
+        let mut tracks: Vec<Track> =
+            core::mem::take(&mut self.tracks).into_vec();
+        while tracks.len() < count {
+            tracks.push(crate::track::TrackFragment::new().compile());
+        }
+        self.tracks = tracks.into_boxed_slice();
+    }
+
+    /// Remove every single action and reset the timeline to a single
+    /// empty track.
+    pub fn clear_actions(&mut self) {
+        self.action_world = ActionWorld::new();
+        self.pipeline_counts = Box::default();
+        self.tracks =
+            Box::new([crate::track::TrackFragment::new().compile()]);
+        self.queue_cache.clear();
+        self.curr_time = 0.0;
+        self.target_time = 0.0;
+        self.curr_index = 0;
+        self.target_index = 0;
+    }
+}
+
 /// Cached actions that are queued to be sampled.
 ///
 /// This cache prevents duplicated samples on the same [`ActionKey`]
@@ -446,6 +769,9 @@ impl<'a, W: 'static> TimelineBuilder<'a, W> {
         S: 'static,
         T: Interpolation<M> + Clone + ThreadSafe,
     {
+        // Register the live constructor so this field can also
+        // be edited at runtime.
+        self.registry.live.register::<W, I, S, T, M>();
         self.act_builder(target, field_acc, action)
             .with_interp(T::interp)
     }

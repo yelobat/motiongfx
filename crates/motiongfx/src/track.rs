@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use bevy_platform::collections::HashMap;
 use field_path::field::UntypedField;
 
-use crate::action::{ActionClip, ActionKey};
+use crate::action::{ActionClip, ActionId, ActionKey};
+use crate::live::LiveEditError;
 use crate::sequence::Sequence;
 
 pub trait TrackOrdering {
@@ -192,6 +193,15 @@ impl TrackFragment {
     }
 
     pub fn compile(self) -> Track {
+        if self.sequences.is_empty() {
+            return Track {
+                field_lookups: Box::new([]),
+                sequence_spans: Box::new([]),
+                clip_arena: Box::new([]),
+                duration: self.duration,
+            };
+        }
+
         let mut sequences =
             self.sequences.into_iter().collect::<Vec<_>>();
         sequences.sort_by_key(|(key, _)| *key.field());
@@ -324,6 +334,159 @@ impl Track {
     pub fn duration(&self) -> f32 {
         self.duration
     }
+
+    /// Reconstruct an editable [`TrackFragment`] from this
+    /// compiled track. Used by live editing to add/remove clips
+    /// and recompile.
+    pub fn to_fragment(&self) -> TrackFragment {
+        let mut sequences: HashMap<ActionKey, Sequence> =
+            HashMap::new();
+
+        for (key, span) in self.sequences_spans() {
+            let clips = self.clips(*span);
+            if clips.is_empty() {
+                continue;
+            }
+
+            let mut seq = Sequence::new(clips[0]);
+            for clip in &clips[1..] {
+                seq.push(*clip);
+            }
+            sequences.insert(*key, seq);
+        }
+
+        TrackFragment {
+            sequences,
+            duration: self.duration,
+        }
+    }
+}
+
+impl TrackFragment {
+    /// Append a clip for `key`, scheduled to start at the
+    /// current end of that key's sequence (or at `start_at` if later).
+    /// Extends the track duration if needed. Returns the scheduled start time.
+    pub fn append_clip(
+        &mut self,
+        key: ActionKey,
+        clip: ActionClip,
+        start_at: f32,
+    ) -> f32 {
+        let start = match self.sequences.get(&key) {
+            Some(seq) => seq.end().max(start_at),
+            None => start_at.max(0.0),
+        };
+        let mut clip = clip;
+        clip.start = start;
+
+        match self.sequences.get_mut(&key) {
+            Some(seq) => seq.push(clip),
+            None => {
+                self.sequences.insert(key, Sequence::new(clip));
+            }
+        }
+
+        self.duration = self.duration.max(clip.end());
+        start
+    }
+
+    /// Remove the clip with the given [`ActionId`] from `key`'s
+    /// sequence. Returns `true` if a clip was removed. If the sequence
+    /// becomes empty it is dropped entirely.
+    pub fn remove_clip(
+        &mut self,
+        key: &ActionKey,
+        id: ActionId,
+    ) -> bool {
+        let Some(seq) = self.sequences.get(key) else {
+            return false;
+        };
+
+        let remaining: Vec<ActionClip> = seq
+            .clips
+            .iter()
+            .copied()
+            .filter(|c| c.id != id)
+            .collect();
+
+        if remaining.len() == seq.clips.len() {
+            return false;
+        }
+
+        match remaining.split_first() {
+            Some((first, rest)) => {
+                let mut new_seq = Sequence::new(*first);
+                for c in rest {
+                    new_seq.push(*c);
+                }
+                self.sequences.insert(*key, new_seq);
+            }
+            None => {
+                self.sequences.remove(key);
+            }
+        }
+
+        self.duration = self
+            .sequences
+            .values()
+            .map(|s| s.end())
+            .fold(0.0_f32, f32::max);
+
+        true
+    }
+
+    /// Reschedule the clip with the given [`ActionId`] to a new start
+    /// time (and, optionally, a new duration), keeping it in the same
+    /// sequence.
+    ///
+    /// The clip stays attached to the same `(subject, field)` action.
+    pub fn reschedule_clip(
+        &mut self,
+        id: ActionId,
+        new_start: f32,
+        new_duration: Option<f32>,
+    ) -> Result<(), LiveEditError> {
+        let Some(key) = self.sequences.iter().find_map(|(k, seq)| {
+            seq.clips.iter().any(|c| c.id == id).then_some(*k)
+        }) else {
+            return Err(LiveEditError::NotFound);
+        };
+
+        let mut clips: Vec<ActionClip> =
+            self.sequences[&key].clips.iter().copied().collect();
+        for clip in clips.iter_mut() {
+            if clip.id == id {
+                clip.start = new_start.max(0.0);
+                if let Some(duration) = new_duration {
+                    clip.duration = duration.max(0.0);
+                }
+            }
+        }
+
+        clips.sort_by(|a, b| {
+            a.start
+                .partial_cmp(&b.start)
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+
+        let (first, rest) = clips.split_first().expect("non-empty");
+        let mut new_seq = Sequence::new(*first);
+        for clip in rest {
+            new_seq.try_push(*clip).map_err(|conflict| {
+                let other =
+                    if conflict.id == id { *clip } else { conflict };
+                LiveEditError::Overlap { conflict: other.id }
+            })?;
+        }
+        *self.sequences.get_mut(&key).unwrap() = new_seq;
+
+        self.duration = self
+            .sequences
+            .values()
+            .map(|s| s.end())
+            .fold(0.0_f32, f32::max);
+        Ok(())
+    }
 }
 
 impl IntoIterator for Track {
@@ -452,5 +615,116 @@ mod tests {
         assert_eq!(seq_a.start(), 1.5);
         assert_eq!(seq_a.end(), 3.5);
         assert_eq!(track.duration, 2.0);
+    }
+
+    #[test]
+    fn roundtrip_to_fragment_preserves_clips() {
+        let frag = [
+            TrackFragment::single(key("a"), clip(1.0)),
+            TrackFragment::single(key("b"), clip(2.0)),
+        ]
+        .ord_all();
+        let compiled = frag.compile();
+        let rebuilt = compiled.to_fragment();
+
+        assert_eq!(rebuilt.sequences.len(), 2);
+        assert_eq!(rebuilt.duration, 2.0);
+        assert_eq!(rebuilt.sequences[&key("a")].end(), 1.0);
+        assert_eq!(rebuilt.sequences[&key("b")].end(), 2.0);
+    }
+
+    #[test]
+    fn append_clip_schedules_after_existing() {
+        let mut frag = TrackFragment::single(key("a"), clip(1.0))
+            .compile()
+            .to_fragment();
+
+        let id = ActionId::PLACEHOLDER;
+        let start =
+            frag.append_clip(key("a"), ActionClip::new(id, 2.0), 0.0);
+        assert_eq!(start, 1.0);
+        assert_eq!(frag.duration, 3.0);
+        assert_eq!(frag.sequences[&key("a")].len(), 2);
+    }
+
+    #[test]
+    fn append_clip_new_key_starts_at_start_at() {
+        let mut frag = TrackFragment::single(key("a"), clip(1.0))
+            .compile()
+            .to_fragment();
+        let id = ActionId::PLACEHOLDER;
+        let start =
+            frag.append_clip(key("b"), ActionClip::new(id, 1.0), 0.5);
+        assert_eq!(start, 0.5);
+        assert_eq!(frag.duration, 1.5);
+    }
+
+    #[test]
+    fn remove_clip_empties_sequence() {
+        let id = Entity::from_raw_u32(7).unwrap();
+        let action_id = ActionId::new(id);
+        let mut frag = TrackFragment::single(
+            key("a"),
+            ActionClip::new(action_id, 1.0),
+        )
+        .compile()
+        .to_fragment();
+
+        assert!(frag.remove_clip(&key("a"), action_id));
+        assert!(frag.sequences.is_empty());
+        assert_eq!(frag.duration, 0.0);
+        let _ = frag.compile();
+    }
+
+    #[test]
+    fn reschedule_clip_moves_start_and_updates_duration() {
+        let id = Entity::from_raw_u32(9).unwrap();
+        let action_id = ActionId::new(id);
+        let mut frag = TrackFragment::single(
+            key("a"),
+            ActionClip::new(action_id, 1.0),
+        )
+        .compile()
+        .to_fragment();
+
+        assert_eq!(frag.duration, 1.0);
+        assert_eq!(
+            frag.reschedule_clip(action_id, 2.0, Some(3.0)),
+            Ok(())
+        );
+        assert_eq!(frag.duration, 5.0);
+        assert_eq!(frag.sequences[&key("a")].start(), 2.0);
+        assert_eq!(frag.sequences[&key("a")].end(), 5.0);
+
+        let other = ActionId::new(Entity::from_raw_u32(10).unwrap());
+        assert_eq!(
+            frag.reschedule_clip(other, 0.0, None),
+            Err(LiveEditError::NotFound)
+        );
+    }
+
+    #[test]
+    fn reschedule_clip_overlap_fails_without_mutating() {
+        let first = ActionId::new(Entity::from_raw_u32(11).unwrap());
+        let second = ActionId::new(Entity::from_raw_u32(12).unwrap());
+        let mut frag = TrackFragment::single(
+            key("a"),
+            ActionClip::new(first, 1.0),
+        );
+        frag.append_clip(key("a"), ActionClip::new(second, 1.0), 0.0);
+
+        assert_eq!(
+            frag.reschedule_clip(second, 0.5, None),
+            Err(LiveEditError::Overlap { conflict: first })
+        );
+
+        assert_eq!(frag.sequences[&key("a")].start(), 0.0);
+        assert_eq!(frag.sequences[&key("a")].end(), 2.0);
+        assert_eq!(frag.duration, 2.0);
+
+        assert_eq!(
+            frag.reschedule_clip(first, 0.5, None),
+            Err(LiveEditError::Overlap { conflict: second })
+        );
     }
 }

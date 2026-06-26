@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod action;
 pub mod ease;
 pub mod interpolation;
+pub mod live;
 pub mod pipeline;
 pub mod registry;
 pub mod sequence;
@@ -22,11 +23,15 @@ pub mod prelude {
 
     pub use crate::ThreadSafe;
     pub use crate::action::{
-        Action, ActionBuilder, ActionId, EaseFn, InterpActionBuilder,
-        InterpFn,
+        Action, ActionBuilder, ActionId, Ease, EaseFn,
+        InterpActionBuilder, InterpFn,
     };
     pub use crate::ease;
     pub use crate::interpolation::Interpolation;
+    pub use crate::live::{
+        LiveActionError, LiveActionRegistry, LiveEditError,
+        LiveFieldKey, LiveKeyframe, LiveTarget,
+    };
     pub use crate::path;
     pub use crate::pipeline::PipelineKey;
     pub use crate::registry::{
