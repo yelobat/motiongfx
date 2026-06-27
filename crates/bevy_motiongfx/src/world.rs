@@ -35,6 +35,27 @@ impl<S: Component<Mutability = Mutable>> SubjectSource<Entity, S>
     }
 }
 
+/// Subject id for resources. Because a [`Resource`] has exactly
+/// one instance per [`World`], its id is just a unit struct.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub struct ResourceSubject;
+
+impl<S: Resource> SubjectSource<ResourceSubject, S> for BevyWorld {
+    fn get_source(&self, _id: ResourceSubject) -> Option<&S> {
+        self.0.get_resource::<S>()
+    }
+
+    fn apply_source<R>(
+        &mut self,
+        _id: ResourceSubject,
+        f: impl FnOnce(&mut S) -> R,
+    ) -> Option<R> {
+        self.0.get_resource_mut::<S>().map(|mut m| f(&mut *m))
+    }
+}
+
 #[cfg(feature = "asset")]
 impl<S: bevy_asset::Asset>
     SubjectSource<bevy_asset::UntypedAssetId, S> for BevyWorld
