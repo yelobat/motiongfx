@@ -2,6 +2,8 @@ use core::ops::{Deref, DerefMut};
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
+#[cfg(feature = "remote")]
+use bevy_ecs::reflect::ReflectComponent;
 use bevy_platform::collections::HashMap;
 use motiongfx::prelude::*;
 
@@ -47,10 +49,36 @@ fn sample_timelines(world: &mut World) {
 
 /// A unique Id for a [`Timeline`].
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "remote",
+    derive(bevy_reflect::Reflect),
+    reflect(Component)
+)]
 pub struct TimelineId(u64);
+
+impl TimelineId {
+    /// Construct a [`TimelineId`] from its raw `u64`.
+    #[inline]
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Return the raw `u64` backing this id.
+    #[inline]
+    #[must_use]
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
 
 /// Signal for complete timelines
 #[derive(Component)]
+#[cfg_attr(
+    feature = "remote",
+    derive(bevy_reflect::Reflect),
+    reflect(Component)
+)]
 pub struct TimelineComplete;
 
 #[expect(clippy::type_complexity)]
@@ -120,6 +148,13 @@ impl MotionGfxManager {
             .map(|t| t.take())
     }
 
+    pub fn iter_ids(&self) -> impl Iterator<Item = TimelineId> + '_ {
+        self.timelines
+            .keys()
+            .chain(self.pending_timelines.keys())
+            .copied()
+    }
+
     pub fn get_timeline(
         &self,
         id: &TimelineId,
@@ -137,6 +172,27 @@ impl MotionGfxManager {
         self.timelines
             .get_mut(id)
             .or_else(|| self.pending_timelines.get_mut(id))
+    }
+
+    #[inline]
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    #[inline]
+    pub fn registry_mut(&mut self) -> &mut Registry {
+        &mut self.registry
+    }
+
+    pub fn registry_and_timeline_mut(
+        &mut self,
+        id: &TimelineId,
+    ) -> Option<(&Registry, &mut MutDetect<BevyTimeline>)> {
+        let timeline = self
+            .timelines
+            .get_mut(id)
+            .or_else(|| self.pending_timelines.get_mut(id))?;
+        Some((&self.registry, timeline))
     }
 
     pub fn load_pending_timelines(&mut self, world: &World) {

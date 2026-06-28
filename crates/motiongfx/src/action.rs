@@ -849,7 +849,7 @@ pub struct Keyframe<T> {
 #[component(immutable)]
 pub struct KeyframesStorage<T> {
     /// Non-empty, sorted ascending by `t`, each `t` in `0..=1`.
-    /// Construction (the live path) sorts and clamps.
+    /// Construction (the remote path) sorts and clamps.
     pub points: Vec<Keyframe<T>>,
 }
 

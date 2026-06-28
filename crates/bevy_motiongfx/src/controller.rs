@@ -1,5 +1,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
+#[cfg(feature = "remote")]
+use bevy_ecs::reflect::ReflectComponent;
 use bevy_time::prelude::*;
 
 use crate::MotionGfxSet;
@@ -57,6 +59,11 @@ fn fixed_rate_player_timing(
 ///
 /// [`Timeline`]: motiongfx::timeline::Timeline
 #[derive(Component, Debug)]
+#[cfg_attr(
+    feature = "remote",
+    derive(bevy_reflect::Reflect),
+    reflect(Component)
+)]
 pub struct RealtimePlayer {
     /// Determines if the timeline is currently playing.
     pub is_playing: bool,
@@ -120,6 +127,11 @@ impl Default for RealtimePlayer {
 ///
 /// [`Timeline`]: motiongfx::timeline::Timeline
 #[derive(Component, Debug)]
+#[cfg_attr(
+    feature = "remote",
+    derive(bevy_reflect::Reflect),
+    reflect(Component)
+)]
 pub struct FixedRatePlayer {
     /// Determines how many snapshots per second to take.
     pub fps: u16,

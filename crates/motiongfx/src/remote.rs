@@ -14,44 +14,44 @@ use crate::pipeline::PipelineKey;
 use crate::subject::SubjectId;
 
 /// A type-erased target.
-pub struct LiveTarget {
+pub struct RemoteTarget {
     pub end: Box<dyn Any + Send + Sync>,
 }
 
-impl LiveTarget {
+impl RemoteTarget {
     pub fn new<T: ThreadSafe>(end: T) -> Self {
         Self { end: Box::new(end) }
     }
 }
 
 /// A type-erased keyframe.
-pub struct LiveKeyframe {
+pub struct RemoteKeyframe {
     /// Normalised time within the clip, `0..=1`.
     pub t: f32,
     /// The value at `t`.
-    pub value: LiveTarget,
+    pub value: RemoteTarget,
     /// Ease of the segment ending at this keyframe.
     pub ease: Option<Ease>,
     pub hold: bool,
 }
 
-/// Errors from a live action construction.
+/// Errors from a remote action construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LiveActionError {
+pub enum RemoteActionError {
     /// No constructor registered for the requested key/field.
     Unregistered,
-    /// The boxed [`LiveTarget`] value was not the expected type `T`.
+    /// The boxed [`RemoteTarget`] value was not the expected type `T`.
     TypeMismatch,
     /// A keyframe list was rejected.
     InvalidKeyframes(&'static str),
 }
 
-/// Errors from a structural live edit on a compiled
+/// Errors from a structural remote edit on a compiled
 /// [`Timeline`](crate::timeline::Timeline).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LiveEditError {
+pub enum RemoteEditError {
     /// Constructor the action failed.
-    Action(LiveActionError),
+    Action(RemoteActionError),
     /// The edit would make the clip overlap an existing clip
     /// for the same subject + field.
     Overlap { conflict: ActionId },
@@ -61,8 +61,8 @@ pub enum LiveEditError {
     TrackOutOfRange,
 }
 
-impl From<LiveActionError> for LiveEditError {
-    fn from(err: LiveActionError) -> Self {
+impl From<RemoteActionError> for RemoteEditError {
+    fn from(err: RemoteActionError) -> Self {
         Self::Action(err)
     }
 }
@@ -74,9 +74,9 @@ type ConstructFn = Box<
             &mut ActionWorld,
             &dyn Any,
             UntypedField,
-            LiveTarget,
+            RemoteTarget,
             Option<Ease>,
-        ) -> Result<ActionId, LiveActionError>
+        ) -> Result<ActionId, RemoteActionError>
         + Send
         + Sync,
 >;
@@ -87,8 +87,8 @@ type UpdateFn = Box<
     dyn Fn(
             &mut ActionWorld,
             ActionId,
-            LiveTarget,
-        ) -> Result<(), LiveActionError>
+            RemoteTarget,
+        ) -> Result<(), RemoteActionError>
         + Send
         + Sync,
 >;
@@ -99,9 +99,9 @@ type KeyframesCtorFn = Box<
             &mut ActionWorld,
             &dyn Any,
             UntypedField,
-            Vec<LiveKeyframe>,
+            Vec<RemoteKeyframe>,
             Option<Ease>,
-        ) -> Result<ActionId, LiveActionError>
+        ) -> Result<ActionId, RemoteActionError>
         + Send
         + Sync,
 >;
@@ -111,27 +111,27 @@ type KeyframesUpdateFn = Box<
     dyn Fn(
             &mut ActionWorld,
             ActionId,
-            Vec<LiveKeyframe>,
-        ) -> Result<(), LiveActionError>
+            Vec<RemoteKeyframe>,
+        ) -> Result<(), RemoteActionError>
         + Send
         + Sync,
 >;
 
 /// The type-erased closures registered per pipeline key.
-struct LiveEntry {
+struct RemoteEntry {
     construct: ConstructFn,
     update: UpdateFn,
     construct_keyframes: KeyframesCtorFn,
     update_keyframes: KeyframesUpdateFn,
 }
 
-/// Registry of type-erased live-action constructors.
+/// Registry of type-erased remote-action constructors.
 #[derive(Default)]
-pub struct LiveActionRegistry {
-    entries: HashMap<PipelineKey, LiveEntry>,
+pub struct RemoteActionRegistry {
+    entries: HashMap<PipelineKey, RemoteEntry>,
 }
 
-impl LiveActionRegistry {
+impl RemoteActionRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -139,7 +139,7 @@ impl LiveActionRegistry {
     }
 
     /// Register a constant-target constructor for `(W, I, S, T)`.
-    /// A field is only live-editable if it is registered here.
+    /// A field is only remote-editable if it is registered here.
     pub fn register<W, I, S, T, M>(&mut self)
     where
         W: 'static,
@@ -156,15 +156,15 @@ impl LiveActionRegistry {
             |action_world: &mut ActionWorld,
              subject: &dyn Any,
              field: UntypedField,
-             target: LiveTarget,
+             target: RemoteTarget,
              ease: Option<Ease>| {
                 let subject = subject
                     .downcast_ref::<I>()
-                    .ok_or(LiveActionError::TypeMismatch)?;
+                    .ok_or(RemoteActionError::TypeMismatch)?;
                 let end = target
                     .end
                     .downcast::<T>()
-                    .map_err(|_| LiveActionError::TypeMismatch)?;
+                    .map_err(|_| RemoteActionError::TypeMismatch)?;
                 let end = *end;
 
                 let action = move |_start: &T| end.clone();
@@ -184,16 +184,16 @@ impl LiveActionRegistry {
         let update: UpdateFn = Box::new(
             |action_world: &mut ActionWorld,
              id: ActionId,
-             target: LiveTarget| {
+             target: RemoteTarget| {
                 let end = target
                     .end
                     .downcast::<T>()
-                    .map_err(|_| LiveActionError::TypeMismatch)?;
+                    .map_err(|_| RemoteActionError::TypeMismatch)?;
                 let end = *end;
 
                 let action = move |_start: &T| end.clone();
                 if !action_world.replace_action::<T>(id, action) {
-                    return Err(LiveActionError::TypeMismatch);
+                    return Err(RemoteActionError::TypeMismatch);
                 }
                 Ok(())
             },
@@ -203,11 +203,11 @@ impl LiveActionRegistry {
             |action_world: &mut ActionWorld,
              subject: &dyn Any,
              field: UntypedField,
-             keyframes: Vec<LiveKeyframe>,
+             keyframes: Vec<RemoteKeyframe>,
              ease: Option<Ease>| {
                 let subject = subject
                     .downcast_ref::<I>()
-                    .ok_or(LiveActionError::TypeMismatch)?;
+                    .ok_or(RemoteActionError::TypeMismatch)?;
                 let points = downcast_keyframes::<T>(keyframes)?;
 
                 let last = points[points.len() - 1].value.clone();
@@ -229,16 +229,16 @@ impl LiveActionRegistry {
         let kf_update: KeyframesUpdateFn = Box::new(
             |action_world: &mut ActionWorld,
              id: ActionId,
-             keyframes: Vec<LiveKeyframe>| {
+             keyframes: Vec<RemoteKeyframe>| {
                 if action_world.get_keyframes::<T>(id).is_none() {
-                    return Err(LiveActionError::TypeMismatch);
+                    return Err(RemoteActionError::TypeMismatch);
                 }
                 let points = downcast_keyframes::<T>(keyframes)?;
 
                 let last = points[points.len() - 1].value.clone();
                 let action = move |_start: &T| last.clone();
                 if !action_world.replace_action::<T>(id, action) {
-                    return Err(LiveActionError::TypeMismatch);
+                    return Err(RemoteActionError::TypeMismatch);
                 }
 
                 action_world
@@ -249,7 +249,7 @@ impl LiveActionRegistry {
 
         self.entries.insert(
             key,
-            LiveEntry {
+            RemoteEntry {
                 construct: ctor,
                 update,
                 construct_keyframes: kf_ctor,
@@ -258,20 +258,20 @@ impl LiveActionRegistry {
         );
     }
 
-    /// Construct and insert a live action, returning its [`ActionId`].
+    /// Construct and insert a remote action, returning its [`ActionId`].
     pub fn construct(
         &self,
         key: &PipelineKey,
         action_world: &mut ActionWorld,
         subject: &dyn Any,
         field: UntypedField,
-        target: LiveTarget,
+        target: RemoteTarget,
         ease: Option<Ease>,
-    ) -> Result<ActionId, LiveActionError> {
+    ) -> Result<ActionId, RemoteActionError> {
         let entry = self
             .entries
             .get(key)
-            .ok_or(LiveActionError::Unregistered)?;
+            .ok_or(RemoteActionError::Unregistered)?;
         (entry.construct)(action_world, subject, field, target, ease)
     }
 
@@ -281,16 +281,16 @@ impl LiveActionRegistry {
         key: &PipelineKey,
         action_world: &mut ActionWorld,
         id: ActionId,
-        target: LiveTarget,
-    ) -> Result<(), LiveActionError> {
+        target: RemoteTarget,
+    ) -> Result<(), RemoteActionError> {
         let entry = self
             .entries
             .get(key)
-            .ok_or(LiveActionError::Unregistered)?;
+            .ok_or(RemoteActionError::Unregistered)?;
         (entry.update)(action_world, id, target)
     }
 
-    /// Construct and insert a live **keyframed** action, returning its
+    /// Construct and insert a remote **keyframed** action, returning its
     /// [`ActionId`].
     pub fn construct_keyframes(
         &self,
@@ -298,13 +298,13 @@ impl LiveActionRegistry {
         action_world: &mut ActionWorld,
         subject: &dyn Any,
         field: UntypedField,
-        keyframes: Vec<LiveKeyframe>,
+        keyframes: Vec<RemoteKeyframe>,
         ease: Option<Ease>,
-    ) -> Result<ActionId, LiveActionError> {
+    ) -> Result<ActionId, RemoteActionError> {
         let entry = self
             .entries
             .get(key)
-            .ok_or(LiveActionError::Unregistered)?;
+            .ok_or(RemoteActionError::Unregistered)?;
         (entry.construct_keyframes)(
             action_world,
             subject,
@@ -320,12 +320,12 @@ impl LiveActionRegistry {
         key: &PipelineKey,
         action_world: &mut ActionWorld,
         id: ActionId,
-        keyframes: Vec<LiveKeyframe>,
-    ) -> Result<(), LiveActionError> {
+        keyframes: Vec<RemoteKeyframe>,
+    ) -> Result<(), RemoteActionError> {
         let entry = self
             .entries
             .get(key)
-            .ok_or(LiveActionError::Unregistered)?;
+            .ok_or(RemoteActionError::Unregistered)?;
         (entry.update_keyframes)(action_world, id, keyframes)
     }
 
@@ -335,13 +335,13 @@ impl LiveActionRegistry {
     }
 }
 
-/// Downcast a [`LiveKeyframe`] list to conrete points, then sort
+/// Downcast a [`RemoteKeyframe`] list to conrete points, then sort
 /// by `t` and clamp each `t` to `0..=1`.
 fn downcast_keyframes<T: ThreadSafe>(
-    keyframes: Vec<LiveKeyframe>,
-) -> Result<Vec<Keyframe<T>>, LiveActionError> {
+    keyframes: Vec<RemoteKeyframe>,
+) -> Result<Vec<Keyframe<T>>, RemoteActionError> {
     if keyframes.is_empty() {
-        return Err(LiveActionError::InvalidKeyframes(
+        return Err(RemoteActionError::InvalidKeyframes(
             "keyframe list is empty",
         ));
     }
@@ -349,7 +349,7 @@ fn downcast_keyframes<T: ThreadSafe>(
     let mut points = Vec::with_capacity(keyframes.len());
     for kf in keyframes {
         if !kf.t.is_finite() {
-            return Err(LiveActionError::InvalidKeyframes(
+            return Err(RemoteActionError::InvalidKeyframes(
                 "keyframe `t` is not finite",
             ));
         }
@@ -357,7 +357,7 @@ fn downcast_keyframes<T: ThreadSafe>(
             .value
             .end
             .downcast::<T>()
-            .map_err(|_| LiveActionError::TypeMismatch)?;
+            .map_err(|_| RemoteActionError::TypeMismatch)?;
         points.push(Keyframe {
             t: kf.t.clamp(0.0, 1.0),
             value: *value,
@@ -374,12 +374,12 @@ fn downcast_keyframes<T: ThreadSafe>(
 
 /// Identifies an animatable field at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LiveFieldKey {
+pub struct RemoteFieldKey {
     pub pipeline: PipelineKey,
     pub field: UntypedField,
 }
 
-impl LiveFieldKey {
+impl RemoteFieldKey {
     pub fn new(pipeline: PipelineKey, field: UntypedField) -> Self {
         Self { pipeline, field }
     }

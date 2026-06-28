@@ -6,7 +6,7 @@ extern crate alloc;
 pub mod action;
 pub mod ease;
 pub mod interpolation;
-pub mod live;
+pub mod remote;
 pub mod pipeline;
 pub mod registry;
 pub mod sequence;
@@ -28,9 +28,9 @@ pub mod prelude {
     };
     pub use crate::ease;
     pub use crate::interpolation::Interpolation;
-    pub use crate::live::{
-        LiveActionError, LiveActionRegistry, LiveEditError,
-        LiveFieldKey, LiveKeyframe, LiveTarget,
+    pub use crate::remote::{
+        RemoteActionError, RemoteActionRegistry, RemoteEditError,
+        RemoteFieldKey, RemoteKeyframe, RemoteTarget,
     };
     pub use crate::path;
     pub use crate::pipeline::PipelineKey;

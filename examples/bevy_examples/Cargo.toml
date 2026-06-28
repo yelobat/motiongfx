@@ -8,8 +8,10 @@ readme.workspace = true
 publish = false
 
 [dependencies]
-bevy_motiongfx = { workspace = true }
-bevy = { workspace = true, default-features = true }
+bevy_motiongfx = { workspace = true, features = ["remote"] }
+bevy = { workspace = true, default-features = true, features = [
+    "bevy_remote",
+]}
 
 [lints]
 workspace = true

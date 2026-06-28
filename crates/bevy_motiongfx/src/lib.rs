@@ -10,6 +10,8 @@ use crate::manager::MotionGfxManagerPlugin;
 pub mod controller;
 pub mod interpolation;
 pub mod manager;
+#[cfg(feature = "remote")]
+pub mod remote;
 pub mod world;
 
 pub mod prelude {

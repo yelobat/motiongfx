@@ -4,7 +4,7 @@ use bevy_platform::collections::HashMap;
 use field_path::field::UntypedField;
 
 use crate::action::{ActionClip, ActionId, ActionKey};
-use crate::live::LiveEditError;
+use crate::remote::RemoteEditError;
 use crate::sequence::Sequence;
 
 pub trait TrackOrdering {
@@ -336,7 +336,7 @@ impl Track {
     }
 
     /// Reconstruct an editable [`TrackFragment`] from this
-    /// compiled track. Used by live editing to add/remove clips
+    /// compiled track. Used by remote editing to add/remove clips
     /// and recompile.
     pub fn to_fragment(&self) -> TrackFragment {
         let mut sequences: HashMap<ActionKey, Sequence> =
@@ -445,11 +445,11 @@ impl TrackFragment {
         id: ActionId,
         new_start: f32,
         new_duration: Option<f32>,
-    ) -> Result<(), LiveEditError> {
+    ) -> Result<(), RemoteEditError> {
         let Some(key) = self.sequences.iter().find_map(|(k, seq)| {
             seq.clips.iter().any(|c| c.id == id).then_some(*k)
         }) else {
-            return Err(LiveEditError::NotFound);
+            return Err(RemoteEditError::NotFound);
         };
 
         let mut clips: Vec<ActionClip> =
@@ -475,7 +475,7 @@ impl TrackFragment {
             new_seq.try_push(*clip).map_err(|conflict| {
                 let other =
                     if conflict.id == id { *clip } else { conflict };
-                LiveEditError::Overlap { conflict: other.id }
+                RemoteEditError::Overlap { conflict: other.id }
             })?;
         }
         *self.sequences.get_mut(&key).unwrap() = new_seq;
@@ -699,7 +699,7 @@ mod tests {
         let other = ActionId::new(Entity::from_raw_u32(10).unwrap());
         assert_eq!(
             frag.reschedule_clip(other, 0.0, None),
-            Err(LiveEditError::NotFound)
+            Err(RemoteEditError::NotFound)
         );
     }
 
@@ -715,7 +715,7 @@ mod tests {
 
         assert_eq!(
             frag.reschedule_clip(second, 0.5, None),
-            Err(LiveEditError::Overlap { conflict: first })
+            Err(RemoteEditError::Overlap { conflict: first })
         );
 
         assert_eq!(frag.sequences[&key("a")].start(), 0.0);
@@ -724,7 +724,7 @@ mod tests {
 
         assert_eq!(
             frag.reschedule_clip(first, 0.5, None),
-            Err(LiveEditError::Overlap { conflict: second })
+            Err(RemoteEditError::Overlap { conflict: second })
         );
     }
 }

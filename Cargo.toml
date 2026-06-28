@@ -25,6 +25,12 @@ bevy_asset = { version = "0.18.1", default-features = false }
 bevy_time = { version = "0.18.1", default-features = false }
 bevy_transform = { version = "0.18.1", default-features = false, features = ["bevy-support"] }
 bevy_color = { version = "0.18.1", default-features = false }
+bevy_reflect = { version = "0.18.1", default-features = false }
+bevy_remote = { version = "0.18.1", default-features = false }
+
+# serialization
+serde = { version = "1", default-features = false }
+serde_json = { version = "1" }
 
 # other
 field_path = "0.4.1"

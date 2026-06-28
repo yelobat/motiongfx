@@ -282,7 +282,7 @@ impl<W: 'static> Timeline<W> {
     }
 
     /// Mutable access to the underlying [`ActionWorld`]. Exposed
-    /// so the live editing layer can perform live edits.
+    /// so the remote editing layer can perform remote edits.
     #[inline]
     pub fn action_world_mut(&mut self) -> &mut ActionWorld {
         &mut self.action_world
@@ -418,33 +418,33 @@ impl<W> Timeline<W> {
     }
 }
 
-// Live editing methods
+// Remote editing methods
 impl<W: 'static> Timeline<W> {
     /// Insert a constant-target action onto `track_index` at runtime.
     #[allow(clippy::too_many_arguments)]
     pub fn insert_constant_action(
         &mut self,
         track_index: usize,
-        live: &crate::live::LiveActionRegistry,
-        key: crate::live::LiveFieldKey,
+        remote: &crate::remote::RemoteActionRegistry,
+        key: crate::remote::RemoteFieldKey,
         subject: &dyn core::any::Any,
-        target: crate::live::LiveTarget,
+        target: crate::remote::RemoteTarget,
         duration: f32,
         start_at: f32,
         ease: Option<crate::action::Ease>,
-    ) -> Result<ActionId, crate::live::LiveEditError> {
+    ) -> Result<ActionId, crate::remote::RemoteEditError> {
         if track_index >= self.tracks.len() {
-            return Err(crate::live::LiveEditError::TrackOutOfRange);
+            return Err(crate::remote::RemoteEditError::TrackOutOfRange);
         }
 
-        if !live.contains(&key.pipeline) {
+        if !remote.contains(&key.pipeline) {
             return Err(
-                crate::live::LiveActionError::Unregistered.into()
+                crate::remote::RemoteActionError::Unregistered.into()
             );
         }
 
         // Build the typed action inside the action world.
-        let id = live.construct(
+        let id = remote.construct(
             &key.pipeline,
             &mut self.action_world,
             subject,
@@ -457,7 +457,7 @@ impl<W: 'static> Timeline<W> {
         self.bump_pipeline(key.pipeline);
 
         // Recompile the affected track with the new clip appended.
-        // The live constructor created the ActionKey from the same
+        // The remote constructor created the ActionKey from the same
         // subject + field, so read it back from the action world.
         let action_key = *self
             .action_world
@@ -474,30 +474,30 @@ impl<W: 'static> Timeline<W> {
         Ok(id)
     }
 
-    /// Insert a live keyframed action onto `track_index` at runtime.
+    /// Insert a remote keyframed action onto `track_index` at runtime.
     #[allow(clippy::too_many_arguments)]
     pub fn insert_keyframes_action(
         &mut self,
         track_index: usize,
-        live: &crate::live::LiveActionRegistry,
-        key: crate::live::LiveFieldKey,
+        remote: &crate::remote::RemoteActionRegistry,
+        key: crate::remote::RemoteFieldKey,
         subject: &dyn core::any::Any,
-        keyframes: alloc::vec::Vec<crate::live::LiveKeyframe>,
+        keyframes: alloc::vec::Vec<crate::remote::RemoteKeyframe>,
         duration: f32,
         start_at: f32,
         ease: Option<crate::action::Ease>,
-    ) -> Result<ActionId, crate::live::LiveEditError> {
+    ) -> Result<ActionId, crate::remote::RemoteEditError> {
         if track_index >= self.tracks.len() {
-            return Err(crate::live::LiveEditError::TrackOutOfRange);
+            return Err(crate::remote::RemoteEditError::TrackOutOfRange);
         }
 
-        if !live.contains(&key.pipeline) {
+        if !remote.contains(&key.pipeline) {
             return Err(
-                crate::live::LiveActionError::Unregistered.into()
+                crate::remote::RemoteActionError::Unregistered.into()
             );
         }
 
-        let id = live.construct_keyframes(
+        let id = remote.construct_keyframes(
             &key.pipeline,
             &mut self.action_world,
             subject,
@@ -526,16 +526,16 @@ impl<W: 'static> Timeline<W> {
     pub fn update_keyframes_action(
         &mut self,
         id: ActionId,
-        live: &crate::live::LiveActionRegistry,
-        keyframes: alloc::vec::Vec<crate::live::LiveKeyframe>,
-    ) -> Result<(), crate::live::LiveEditError> {
+        remote: &crate::remote::RemoteActionRegistry,
+        keyframes: alloc::vec::Vec<crate::remote::RemoteKeyframe>,
+    ) -> Result<(), crate::remote::RemoteEditError> {
         let Some(action_key) = self.action_world.action_key(id)
         else {
-            return Err(crate::live::LiveEditError::NotFound);
+            return Err(crate::remote::RemoteEditError::NotFound);
         };
         let pkey = PipelineKey::from_action_key::<W>(*action_key);
 
-        live.update_keyframes(
+        remote.update_keyframes(
             &pkey,
             &mut self.action_world,
             id,
@@ -549,20 +549,20 @@ impl<W: 'static> Timeline<W> {
         &mut self,
         track_index: usize,
         id: ActionId,
-    ) -> Result<(), crate::live::LiveEditError> {
+    ) -> Result<(), crate::remote::RemoteEditError> {
         if track_index >= self.tracks.len() {
-            return Err(crate::live::LiveEditError::TrackOutOfRange);
+            return Err(crate::remote::RemoteEditError::TrackOutOfRange);
         }
 
         let Some(action_key) = self.action_world.action_key(id)
         else {
-            return Err(crate::live::LiveEditError::NotFound);
+            return Err(crate::remote::RemoteEditError::NotFound);
         };
         let action_key = *action_key;
 
         let mut fragment = self.tracks[track_index].to_fragment();
         if !fragment.remove_clip(&action_key, id) {
-            return Err(crate::live::LiveEditError::NotFound);
+            return Err(crate::remote::RemoteEditError::NotFound);
         }
         self.tracks[track_index] = fragment.compile();
 
@@ -583,9 +583,9 @@ impl<W: 'static> Timeline<W> {
         id: ActionId,
         new_start: f32,
         new_duration: Option<f32>,
-    ) -> Result<(), crate::live::LiveEditError> {
+    ) -> Result<(), crate::remote::RemoteEditError> {
         if track_index >= self.tracks.len() {
-            return Err(crate::live::LiveEditError::TrackOutOfRange);
+            return Err(crate::remote::RemoteEditError::TrackOutOfRange);
         }
 
         let mut fragment = self.tracks[track_index].to_fragment();
@@ -598,15 +598,15 @@ impl<W: 'static> Timeline<W> {
     pub fn update_action(
         &mut self,
         id: ActionId,
-        live: &crate::live::LiveActionRegistry,
-        target: crate::live::LiveTarget,
-    ) -> Result<(), crate::live::LiveEditError> {
+        remote: &crate::remote::RemoteActionRegistry,
+        target: crate::remote::RemoteTarget,
+    ) -> Result<(), crate::remote::RemoteEditError> {
         let Some(action_key) = self.action_world.action_key(id)
         else {
-            return Err(crate::live::LiveEditError::NotFound);
+            return Err(crate::remote::RemoteEditError::NotFound);
         };
         let pkey = PipelineKey::from_action_key::<W>(*action_key);
-        live.update(&pkey, &mut self.action_world, id, target)
+        remote.update(&pkey, &mut self.action_world, id, target)
             .map_err(Into::into)
     }
 
@@ -615,11 +615,11 @@ impl<W: 'static> Timeline<W> {
         &mut self,
         id: ActionId,
         ease: Option<crate::action::Ease>,
-    ) -> Result<(), crate::live::LiveEditError> {
+    ) -> Result<(), crate::remote::RemoteEditError> {
         if self.action_world.set_ease(id, ease) {
             Ok(())
         } else {
-            Err(crate::live::LiveEditError::NotFound)
+            Err(crate::remote::RemoteEditError::NotFound)
         }
     }
 
@@ -628,11 +628,11 @@ impl<W: 'static> Timeline<W> {
         &mut self,
         id: ActionId,
         enabled: bool,
-    ) -> Result<(), crate::live::LiveEditError> {
+    ) -> Result<(), crate::remote::RemoteEditError> {
         if self.action_world.set_disabled(id, !enabled) {
             Ok(())
         } else {
-            Err(crate::live::LiveEditError::NotFound)
+            Err(crate::remote::RemoteEditError::NotFound)
         }
     }
 
@@ -769,9 +769,9 @@ impl<'a, W: 'static> TimelineBuilder<'a, W> {
         S: 'static,
         T: Interpolation<M> + Clone + ThreadSafe,
     {
-        // Register the live constructor so this field can also
+        // Register the remote constructor so this field can also
         // be edited at runtime.
-        self.registry.live.register::<W, I, S, T, M>();
+        self.registry.remote.register::<W, I, S, T, M>();
         self.act_builder(target, field_acc, action)
             .with_interp(T::interp)
     }
