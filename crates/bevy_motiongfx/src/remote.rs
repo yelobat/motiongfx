@@ -822,9 +822,6 @@ struct WatchRef {
     watcher: Option<alloc::string::String>,
 }
 
-/// `motiongfx.get+watch` — streaming twin of `motiongfx.get`: a
-/// long-lived request that emits a full [`TimelineState`] whenever any
-/// of it changes, and nothing while idle.
 fn get_timeline_watching(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -869,7 +866,7 @@ fn default_true() -> bool {
     true
 }
 
-/// Per-`(timeline, watcher)` stream cursor for [`journal_watching`].
+/// Journal cursor for [`journal_watching`].
 pub struct JournalCursor {
     seq: u64,
     last_time: f32,
@@ -877,13 +874,9 @@ pub struct JournalCursor {
 }
 
 /// How many `(timeline, watcher)` cursors are kept before the table
-/// resets (a reset watcher just gets a fresh `hello`).
+/// resets.
 const JOURNAL_CURSOR_CAP: usize = 64;
 
-/// `motiongfx.journal+watch` — the edit/event stream of one timeline,
-/// emitting `{"events": [...]}` frames. Kinds: `hello`, `edit`, `undo`,
-/// `redo`, `marker_set`, `marker_removed`, `renamed`, `track_add`,
-/// `marker` (playhead crossing) and `lost` (fell behind; re-inspect).
 pub fn journal_watching(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -900,7 +893,6 @@ pub fn journal_watching(
             .ok_or_else(|| not_found(p.id))?;
         let timeline = manager
             .get_timeline(&tid)
-            // Erroring ends the stream — the timeline is gone.
             .ok_or_else(|| not_found(p.id))?;
         (
             timeline.curr_time(),
@@ -921,7 +913,6 @@ pub fn journal_watching(
         state.map(|s| s.event_seq(&tid)).unwrap_or_default();
 
     let Some(cursor) = cursors.get_mut(&key) else {
-        // First poll of this watcher: greet, skip the backlog.
         cursors.insert(
             key,
             JournalCursor {
@@ -942,7 +933,6 @@ pub fn journal_watching(
     let mut events: Vec<Value> = Vec::new();
 
     if let Some(state) = state {
-        // Fell off the back of the ring buffer?
         if let Some(oldest) = state.oldest_event_seq(&tid)
             && cursor.seq + 1 < oldest
         {
@@ -956,7 +946,6 @@ pub fn journal_watching(
         }
         cursor.seq = seq_now;
 
-        // Marker crossings on the current track, in either direction.
         if p.marker_events {
             if curr_track == cursor.last_track
                 && curr_time != cursor.last_time
@@ -993,8 +982,6 @@ pub fn journal_watching(
     }
 }
 
-/// `motiongfx.seek` — set target time and/or track (or jump to a
-/// marker).
 pub fn seek_timeline(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1050,7 +1037,6 @@ pub fn seek_timeline(
     snapshot_result(world, id)
 }
 
-/// `motiongfx.play` — start the realtime player.
 fn play_timeline(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1060,7 +1046,6 @@ fn play_timeline(
     snapshot_result(world, id)
 }
 
-/// `motiongfx.pause` — stop the realtime player.
 fn pause_timeline(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1070,7 +1055,6 @@ fn pause_timeline(
     snapshot_result(world, id)
 }
 
-/// `motiongfx.set_time_scale` — change speed/direction.
 fn set_time_scale(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1089,7 +1073,6 @@ fn set_time_scale(
     snapshot_result(world, id)
 }
 
-/// `motiongfx.remove` — drop a timeline from the manager.
 fn remove_timeline(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1108,14 +1091,12 @@ fn remove_timeline(
         return Err(not_found(id));
     }
 
-    // Drop the remote-layer edit state for the removed timeline.
     if let Some(mut state) =
         world.get_resource_mut::<MotionGfxEditState>()
     {
         state.forget(&tid);
     }
 
-    // Despawn the controller entity so the timeline stops being driven.
     if let Some(entity) = timeline_entity(world, id) {
         world.despawn(entity);
     }
@@ -1126,18 +1107,15 @@ fn remove_timeline(
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct MotionGfxCreateParams {
-    /// Optional display name (echoed by `list`/`get` as `name`).
+    /// Optional display name.
     name: Option<alloc::string::String>,
-    /// Number of empty tracks (sequential stages) to start with.
+    /// Number of empty tracks to start with.
     tracks: Option<usize>,
-    /// Spawn the transport entity (paused [`RealtimePlayer`]) so
-    /// `play`/`pause`/`set_time_scale` work. Default `true`.
+    /// Spawn the transport entity (paused [`RealtimePlayer`]).
+    /// Default `true`.
     player: Option<bool>,
 }
 
-/// `motiongfx.timeline_create` — create an empty timeline (and, by
-/// default, its transport entity) so a client can author from a blank
-/// app.
 pub fn timeline_create(
     In(params): In<Option<Value>>,
     world: &mut World,
@@ -1171,8 +1149,6 @@ pub fn timeline_create(
             }));
             let timeline = builder.compile();
             let tid = manager.add_timeline(timeline);
-            // Bake immediately so the timeline is editable before the
-            // next frame's load pass.
             manager.load_pending_timelines(world);
             tid
         },
@@ -1193,13 +1169,11 @@ pub fn timeline_create(
 #[derive(Deserialize)]
 struct MotionGfxRenameParams {
     id: u64,
-    /// New display name; omitted or empty clears it.
+    /// New display name.
     #[serde(default)]
     name: Option<alloc::string::String>,
 }
 
-/// `motiongfx.timeline_rename` — set or clear a timeline's display name.
-/// Version-bumped so watchers notice, but not journaled.
 pub fn timeline_rename(
     In(params): In<Option<Value>>,
     world: &mut World,
