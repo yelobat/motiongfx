@@ -1,6 +1,9 @@
 #![no_std]
 
+extern crate alloc;
+
 pub mod interpolation;
+pub mod morph;
 pub mod trace;
 
 pub mod prelude {
@@ -8,6 +11,7 @@ pub mod prelude {
     pub use peniko::kurbo;
 
     pub use crate::Peniko;
+    pub use crate::morph::PathMorph;
     pub use crate::trace::{
         CubicTracer, LineTracer, PathTracer, QuadTracer, Trace,
     };
