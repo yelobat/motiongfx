@@ -344,7 +344,9 @@ pub(crate) fn resolve_asset_of(
 
     let fields: Vec<&dyn PartialReflect> =
         match reflected.reflect_ref() {
-            ReflectRef::Struct(s) => s.iter_fields().collect(),
+            ReflectRef::Struct(s) => {
+                s.iter_fields().map(|(_, v)| v).collect()
+            }
             ReflectRef::TupleStruct(t) => t.iter_fields().collect(),
             _ => Vec::new(),
         };

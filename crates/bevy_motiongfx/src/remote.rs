@@ -631,131 +631,131 @@ impl MotionGfxRemotePlugin {
     /// resources and systems the methods rely on are registered.
     pub fn extend(plugin: RemotePlugin) -> RemotePlugin {
         plugin
-            .with_method(MOTIONGFX_LIST_METHOD, list_timelines)
-            .with_method(MOTIONGFX_GET_METHOD, get_timeline)
-            .with_watching_method(
+            .with_method_main(MOTIONGFX_LIST_METHOD, list_timelines)
+            .with_method_main(MOTIONGFX_GET_METHOD, get_timeline)
+            .with_watching_method_main(
                 MOTIONGFX_GET_WATCH_METHOD,
                 get_timeline_watching,
             )
-            .with_watching_method(
+            .with_watching_method_main(
                 MOTIONGFX_JOURNAL_WATCH_METHOD,
                 journal_watching,
             )
-            .with_method(MOTIONGFX_SEEK_METHOD, seek_timeline)
-            .with_method(MOTIONGFX_PLAY_METHOD, play_timeline)
-            .with_method(MOTIONGFX_PAUSE_METHOD, pause_timeline)
-            .with_method(
+            .with_method_main(MOTIONGFX_SEEK_METHOD, seek_timeline)
+            .with_method_main(MOTIONGFX_PLAY_METHOD, play_timeline)
+            .with_method_main(MOTIONGFX_PAUSE_METHOD, pause_timeline)
+            .with_method_main(
                 MOTIONGFX_SET_TIME_SCALE_METHOD,
                 set_time_scale,
             )
-            .with_method(MOTIONGFX_REMOVE_METHOD, remove_timeline)
-            .with_method(
+            .with_method_main(MOTIONGFX_REMOVE_METHOD, remove_timeline)
+            .with_method_main(
                 MOTIONGFX_TIMELINE_CREATE_METHOD,
                 timeline_create,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_TRACK_ADD_METHOD,
                 edit::timeline_track_add,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_RENAME_METHOD,
                 timeline_rename,
             )
-            .with_method(MOTIONGFX_SPAWN_METHOD, dynamic::brp_spawn)
-            .with_method(
+            .with_method_main(MOTIONGFX_SPAWN_METHOD, dynamic::brp_spawn)
+            .with_method_main(
                 MOTIONGFX_ANIMATE_METHOD,
                 dynamic::brp_animate,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_LIST_ANIMATIONS_METHOD,
                 dynamic::brp_list_animations,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_REMOVE_ANIMATION_METHOD,
                 dynamic::brp_remove_animation,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_ANIMATABLE_FIELDS_METHOD,
                 edit::animatable_fields,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_INSERT_ACTION_METHOD,
                 edit::timeline_insert_action,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_INSERT_KEYFRAMES_METHOD,
                 edit::timeline_insert_keyframes,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_REMOVE_ACTION_METHOD,
                 edit::timeline_remove_action,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_MOVE_ACTION_METHOD,
                 edit::timeline_move_action,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_CLEAR_METHOD,
                 edit::timeline_clear,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_GC_METHOD,
                 edit::timeline_gc,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_INSPECT_METHOD,
                 inspect::timeline_inspect,
             )
-            .with_method(MOTIONGFX_VALUE_AT_METHOD, inspect::value_at)
-            .with_method(
+            .with_method_main(MOTIONGFX_VALUE_AT_METHOD, inspect::value_at)
+            .with_method_main(
                 MOTIONGFX_TIMELINE_UPDATE_ACTION_METHOD,
                 edit::timeline_update_action,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_BATCH_METHOD,
                 batch::timeline_batch,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_EXPORT_METHOD,
                 persist::timeline_export,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_IMPORT_METHOD,
                 persist::timeline_import,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_MARKER_SET_METHOD,
                 persist::marker_set,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_MARKER_REMOVE_METHOD,
                 persist::marker_remove,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_MARKER_LIST_METHOD,
                 persist::marker_list,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_PROJECT_SAVE_METHOD,
                 project::project_save,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_PROJECT_LOAD_METHOD,
                 project::project_load,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_PROJECT_RESET_METHOD,
                 project::project_reset,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_UNDO_METHOD,
                 batch::timeline_undo,
             )
-            .with_method(
+            .with_method_main(
                 MOTIONGFX_TIMELINE_REDO_METHOD,
                 batch::timeline_redo,
             )
-            .with_method(MOTIONGFX_SCHEMA_METHOD, schema)
+            .with_method_main(MOTIONGFX_SCHEMA_METHOD, schema)
     }
 }
 
@@ -775,7 +775,7 @@ impl Plugin for MotionGfxRemotePlugin {
         app.init_resource::<DynAnimations>().add_systems(
             bevy_app::PostUpdate,
             dynamic::apply_dyn_animations
-                .in_set(crate::MotionGfxSet::Sample),
+                .in_set(crate::MotionGfxSystems::Sample),
         );
     }
 }

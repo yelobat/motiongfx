@@ -313,7 +313,8 @@ pub trait MotionGfxAnimatableApp {
         field_acc: FieldAccessor<R, T>,
     ) -> &mut Self
     where
-        R: Resource + TypePath,
+        R: Resource<Mutability = bevy_ecs::component::Mutable>
+            + TypePath,
         T: Interpolation<M>
             + Clone
             + ThreadSafe
@@ -404,7 +405,8 @@ impl MotionGfxAnimatableApp for App {
         field_acc: FieldAccessor<R, T>,
     ) -> &mut Self
     where
-        R: Resource + TypePath,
+        R: Resource<Mutability = bevy_ecs::component::Mutable>
+            + TypePath,
         T: Interpolation<M>
             + Clone
             + ThreadSafe

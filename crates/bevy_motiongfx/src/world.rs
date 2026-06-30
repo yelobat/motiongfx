@@ -42,7 +42,9 @@ impl<S: Component<Mutability = Mutable>> SubjectSource<Entity, S>
 )]
 pub struct ResourceSubject;
 
-impl<S: Resource> SubjectSource<ResourceSubject, S> for BevyWorld {
+impl<S: Resource<Mutability = bevy_ecs::component::Mutable>>
+    SubjectSource<ResourceSubject, S> for BevyWorld
+{
     fn get_source(&self, _id: ResourceSubject) -> Option<&S> {
         self.0.get_resource::<S>()
     }
